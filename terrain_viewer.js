@@ -1,5 +1,7 @@
 /* eslint no-param-reassign: 0, no-plusplus: 0, camelcase: 0, no-warning-comments: 0 */
 
+const RESIZE_THROTTLE = 200;
+
 let THREE = window.THREE;
 let d3 = window.d3;
 
@@ -12,6 +14,7 @@ export default {
       d3 = window.d3;
     }
 
+    const _ = this.api.imports._;
     const points = this.api.inputState.get(['data', 'points']);
     const pinOptions = this.api.inputState.get('pinOptions').export();
 
@@ -25,7 +28,6 @@ export default {
     this.camera_rotate = null;
     this.raycaster = null;
     this.mouse = null;
-    this.layout = null;
     this.pin = null;
 
     this.mouseLocationBefore = {};
@@ -60,6 +62,23 @@ export default {
     if (!points.isEmpty().export()) {
       this.data();
     }
+
+    this._throttledOnResize = _.throttle(this._onResize.bind(this), RESIZE_THROTTLE);
+    this._boundOnMouseDown = this._onMouseDown.bind(this);
+    this._boundOnMouseMove = this._onMouseMove.bind(this);
+    this._boundOnMouseUp = this._onMouseUp.bind(this);
+
+    window.addEventListener('resize', this._throttledOnResize, false);
+    this.api.layoutElement.addEventListener('mousedown', this._boundOnMouseDown, false);
+    this.api.layoutElement.addEventListener('mousemove', this._boundOnMouseMove, false);
+    this.api.layoutElement.addEventListener('mouseup', this._boundOnMouseUp, false);
+  },
+
+  _destroy() {
+    window.removeEventListener('resize', this._throttledOnResize, false);
+    this.api.layoutElement.removeEventListener('mousedown', this._boundOnMouseDown, false);
+    this.api.layoutElement.removeEventListener('mousemove', this._boundOnMouseMove, false);
+    this.api.layoutElement.removeEventListener('mouseup', this._boundOnMouseUp, false);
   },
 
   getScene() {
@@ -188,9 +207,8 @@ export default {
     this._snapTo(to);
   },
 
-  _snapTo(to, up) {
-    this.camera.up = up ?
-      up : new THREE.Vector3(0, 0, 1);
+  _snapTo(to, up = new THREE.Vector3(0, 0, 1)) {
+    this.camera.up = up;
 
     const TWEEN = this.api.imports.TWEEN;
     const from = {
@@ -318,9 +336,6 @@ export default {
     const sceneOptions = state.get('sceneOptions').export();
     const TWEEN = this.api.imports.TWEEN;
 
-    const width = layout.offsetWidth;
-    const height = layout.offsetHeight;
-
     const scene = new THREE.Scene();
 
     if (sceneOptions.drawAxes) {
@@ -335,12 +350,14 @@ export default {
     const light = new THREE.AmbientLight(0x404040);
     scene.add(light);
 
+    const width = layout.offsetWidth;
+    const height = layout.offsetHeight;
+
     const renderer = new THREE.WebGLRenderer();
     renderer.setSize(width, height);
     this.renderer = renderer;
 
     this.camera = this._makeCamera(width, height);
-    const camera = this.camera;
 
     // Options: TrackballControls, OrbitControls
     const controls = new THREE[sceneOptions.controlType](this.camera, layout);
@@ -369,11 +386,6 @@ export default {
     // When user clicks on layout, run
     this.raycaster = new THREE.Raycaster(); // create once
     this.mouse = new THREE.Vector2(); // create once
-    this.layout = this.api.layoutElement;
-
-    layout.addEventListener('mousedown', this._onMouseDown.bind(this), false);
-    layout.addEventListener('mousemove', this._onMouseMove.bind(this), false);
-    layout.addEventListener('mouseup', this._onMouseUp.bind(this), false);
 
     const _this = this;
     render();
@@ -382,7 +394,21 @@ export default {
       TWEEN.update();
       _this.controls.update();
       requestAnimationFrame(render);
-      renderer.render(scene, camera);
+      renderer.render(scene, _this.camera);
+    }
+  },
+
+  _onResize() {
+    const layout = this.api.layoutElement;
+    const width = layout.offsetWidth;
+    const height = layout.offsetHeight;
+
+    if (this.camera) {
+      this.camera.aspect = width / height;
+      this.camera.updateProjectionMatrix();
+    }
+    if (this.renderer) {
+      this.renderer.setSize(width, height);
     }
   },
 
@@ -414,54 +440,29 @@ export default {
   },
 
   _castRay(event) {
-    const rect = this.layout.getBoundingClientRect();
+    const rect = this.api.layoutElement.getBoundingClientRect();
     this.mouse.x = (((event.clientX - rect.left) / (rect.width)) * 2) - 1;
     this.mouse.y = -(((event.clientY - rect.top) / (rect.height)) * 2) + 1;
 
     this.raycaster.setFromCamera(this.mouse, this.camera);
-    const intersects = this.raycaster.intersectObjects(this.scene.children, true);
 
-    let intersectsLand = false;
-    let intersectsPin = false;
-    let landIntersection = {};
-    let pinIntersection = {};
+    // Check the closest intersecting object
+    const intersection = this.raycaster.intersectObjects(this.scene.children, true)[0];
 
-    // Find the objects that intersect the ray
-    if (intersects.length) {
-      intersects.forEach(thisObj => {
-        // if click intersects the landscape...
-        if (thisObj.object.name === 'landscape') {
-          intersectsLand = true;
-          landIntersection = thisObj;
-        }
-        if (thisObj.object.name === 'pinhead') {
-          intersectsPin = true;
-          pinIntersection = thisObj;
-        }
-      });
-    }
-
-    if (intersectsLand && !intersectsPin) {
-      // only intersects landscape
-      this._handleLandClicks(intersectsLand, landIntersection);
-    }
-
-    if (intersectsPin) {
-      // intersects a pin at all
-      this._handlePinClick(pinIntersection);
-    }
-
-    if (!intersectsLand) {
-      // does not intersect a landscape
-      this._handleLandClicks(intersectsLand, landIntersection);
+    if (intersection && intersection.object.name === 'pinhead') {
+      this._handlePinClick(intersection);
+    } else if (intersection && intersection.object.name === 'landscape') {
+      this._handleLandClick(intersection);
+    } else {
+      this._handleOutsideClick();
     }
   },
 
-  _handlePinClick(pinIntersection) {
+  _handlePinClick(intersection) {
     let myPinData = [];
 
     this.pinData.forEach(thisPin => {
-      if (thisPin.uuid === pinIntersection.object.uuid) {
+      if (thisPin.uuid === intersection.object.uuid) {
         myPinData = thisPin.projectedIds;
       }
     });
@@ -471,55 +472,51 @@ export default {
     // TODO find some way to recall the data points from the pin
   },
 
-  _handleLandClicks(intersectsLandscape, intersection) {
-    // If the ray does not intersect the landscape and
-    // pinOptions has clearOnOutsideClick set true,
-    // need to delete all current pins
-    if (this.currentPinOptions.clearOnOutsideClick && !intersectsLandscape) {
-      this.clearPins();
-    }
-
+  _handleLandClick(intersection) {
     // If multiPins is false, all previous pins must be removed
     if (!this.currentPinOptions.multiPins) {
       this.clearPins();
     }
+    if (!this.currentPinOptions.clickToPin) {
+      return;
+    }
 
-    // If the click intersects the landscape
-    // and clickToPin is set true
-    // Add new pin at location and find closest vertex
-    if (intersectsLandscape && this.currentPinOptions.clickToPin) {
-      // Find closest vertex and associated data
-      const closestVertex = this._findClosestVertex(intersection);
-      const binnedIds = closestVertex.binnedIds;
-      let position = {};
-      // Pinning the closest vertex
-      if (this.currentPinOptions.pinClosestVertex) {
-        position = {
-          x: closestVertex.x,
-          y: closestVertex.y,
-          z: closestVertex.z,
-        };
+    // Find closest vertex and associated data
+    const closestVertex = this._findClosestVertex(intersection);
+    const binnedIds = closestVertex.binnedIds;
+    let position = {};
+    // Pinning the closest vertex
+    if (this.currentPinOptions.pinClosestVertex) {
+      position = {
+        x: closestVertex.x,
+        y: closestVertex.y,
+        z: closestVertex.z,
+      };
 
-      // Pinning the exact spot of the click
-      } else {
-        position = {
-          x: intersection.point.x,
-          y: intersection.point.y,
-          z: intersection.point.z,
-        };
-      }
-      // Add new pin
-      this._addPin(position, binnedIds);
-      // Output the data
-      this.api.output('droppedPin', binnedIds);
-      binnedIds.forEach(thisId => {
-        this.currentPinIds.add(thisId);
-      });
-      this._outputBinnedIds();
+    // Pinning the exact spot of the click
+    } else {
+      position = {
+        x: intersection.point.x,
+        y: intersection.point.y,
+        z: intersection.point.z,
+      };
+    }
 
-    // Otherwise, simply output an empty array
-    // if clickToPin is true.
-    } else if (this.currentPinOptions.clickToPin) {
+    this._addPin(position, binnedIds);
+
+    this.api.output('droppedPin', binnedIds);
+    binnedIds.forEach(thisId => {
+      this.currentPinIds.add(thisId);
+    });
+    this._outputBinnedIds();
+  },
+
+  _handleOutsideClick() {
+    if (this.currentPinOptions.clearOnOutsideClick) {
+      this.clearPins();
+    }
+
+    if (this.currentPinOptions.clickToPin) {
       // reset all data associated with pins
       this.pinData = [];
       this.api.output('droppedPin', []);
@@ -708,13 +705,15 @@ export default {
       const xDist = Math.abs(thisVertex.x - myCoordinate.x);
       const yDist = Math.abs(thisVertex.y - myCoordinate.y);
       const hypDist = Math.hypot(xDist, yDist);
+
       // if searching for closest vertex with real values
-      const isShorterDistance = this.currentPinOptions.findClosestValues &&
-        hypDist < shortestDistance &&
-        this.terrainData[thisVertexIndex].binnedIds.length > 0;
-      if (isShorterDistance) {
-        shortestDistance = hypDist;
-        closestVertexIndex = thisVertexIndex;
+      if (this.currentPinOptions.findClosestValues) {
+        const isCloser = hypDist < shortestDistance &&
+          this.terrainData[thisVertexIndex].binnedIds.length > 0;
+        if (isCloser) {
+          shortestDistance = hypDist;
+          closestVertexIndex = thisVertexIndex;
+        }
 
       // if just searching for closest vertex regardless of value
       } else if (hypDist < shortestDistance) {
@@ -794,9 +793,7 @@ export default {
 
     if (options.camera === 'perspective') {
       camera = new THREE.PerspectiveCamera(45, width / height, 1, 1000);
-    }
-
-    if (options.camera === 'orthographic') {
+    } else if (options.camera === 'orthographic') {
       const left = width / -16;
       const right = width / 16;
       const top = height / 16;
