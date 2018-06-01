@@ -14,10 +14,10 @@ export default {
       d3 = window.d3;
     }
 
-    const _ = this.api.imports._;
     const points = this.api.inputState.get(['data', 'points']);
     const pinOptions = this.api.inputState.get('pinOptions').export();
 
+    this.isRendering = false;
     this.scene = null;
     this.renderer = null;
     this.controls = null;
@@ -28,7 +28,6 @@ export default {
     this.camera_rotate = null;
     this.raycaster = null;
     this.mouse = null;
-    this.pin = null;
 
     this.mouseLocationBefore = {};
     this.mouseLocationAfter = {};
@@ -42,7 +41,6 @@ export default {
     this.pinData = [];
 
     // this.numberOfPins is used to generate unique colors for batches of 10 pins
-    // the integer is reset after every 10, is not a running total of pins
     this.numberOfPins = 0;
 
     // this.currentPinIds is a set containing just the projectedIds of all pinned data
@@ -57,21 +55,13 @@ export default {
     this.heightSegments = 0;
     this.mouseFlag = false;
 
+    this._initEventHandlers();
+
     this._setScene();
 
     if (!points.isEmpty().export()) {
       this.data();
     }
-
-    this._throttledOnResize = _.throttle(this._onResize.bind(this), RESIZE_THROTTLE);
-    this._boundOnMouseDown = this._onMouseDown.bind(this);
-    this._boundOnMouseMove = this._onMouseMove.bind(this);
-    this._boundOnMouseUp = this._onMouseUp.bind(this);
-
-    window.addEventListener('resize', this._throttledOnResize, false);
-    this.api.layoutElement.addEventListener('mousedown', this._boundOnMouseDown, false);
-    this.api.layoutElement.addEventListener('mousemove', this._boundOnMouseMove, false);
-    this.api.layoutElement.addEventListener('mouseup', this._boundOnMouseUp, false);
   },
 
   _destroy() {
@@ -79,6 +69,21 @@ export default {
     this.api.layoutElement.removeEventListener('mousedown', this._boundOnMouseDown, false);
     this.api.layoutElement.removeEventListener('mousemove', this._boundOnMouseMove, false);
     this.api.layoutElement.removeEventListener('mouseup', this._boundOnMouseUp, false);
+  },
+
+  _initEventHandlers() {
+    const _ = this.api.imports._;
+
+    this._throttledOnResize = _.throttle(this._onResize.bind(this), RESIZE_THROTTLE);
+    this._boundOnMouseDown = this._onMouseDown.bind(this);
+    this._boundOnMouseMove = this._onMouseMove.bind(this);
+    this._boundOnMouseUp = this._onMouseUp.bind(this);
+    this._boundRender = this._render.bind(this);
+
+    window.addEventListener('resize', this._throttledOnResize, false);
+    this.api.layoutElement.addEventListener('mousedown', this._boundOnMouseDown, false);
+    this.api.layoutElement.addEventListener('mousemove', this._boundOnMouseMove, false);
+    this.api.layoutElement.addEventListener('mouseup', this._boundOnMouseUp, false);
   },
 
   getScene() {
@@ -111,41 +116,13 @@ export default {
     this._makeTerrainData();
     this._addPlane();
     this.labelOptions();
+    this._addCurrentPinsToScene();
   },
 
   labelOptions() {
     const labelOptions = this.api.inputState.get('labelOptions').export();
-    const scene = this.scene;
 
-    while (scene.getObjectByName('x_axis_label')) {
-      const x_axis_label = scene.getObjectByName('x_axis_label');
-      scene.remove(x_axis_label);
-    }
-
-    while (scene.getObjectByName('y_axis_label')) {
-      const y_axis_label = scene.getObjectByName('y_axis_label');
-      scene.remove(y_axis_label);
-    }
-
-    while (scene.getObjectByName('z_axis_label')) {
-      const z_axis_label = scene.getObjectByName('z_axis_label');
-      scene.remove(z_axis_label);
-    }
-
-    while (scene.getObjectByName('x_value_label')) {
-      const x_value_label = scene.getObjectByName('x_value_label');
-      scene.remove(x_value_label);
-    }
-
-    while (scene.getObjectByName('y_value_label')) {
-      const y_value_label = scene.getObjectByName('y_value_label');
-      scene.remove(y_value_label);
-    }
-
-    while (scene.getObjectByName('outline')) {
-      const outline = scene.getObjectByName('outline');
-      scene.remove(outline);
-    }
+    this._removeLabelsFromScene();
 
     if (labelOptions.drawLabels) {
       this._addAxesLabels();
@@ -250,68 +227,61 @@ export default {
   },
 
   clearScene() {
+    this._removeLabelsFromScene();
+    this._removePinsFromScene();
+    this._removeTerrainFromScene();
+    this._removeAxesHelperFromScene();
+  },
+
+  _removeTerrainFromScene() {
+    this._removeObjectFromScene('landscape');
+  },
+
+  _removeAxesHelperFromScene() {
+    this._removeObjectFromScene('myAxesHelper');
+  },
+
+  _removeLabelsFromScene() {
+    this._removeObjectFromScene('x_axis_label');
+    this._removeObjectFromScene('y_axis_label');
+    this._removeObjectFromScene('z_axis_label');
+    this._removeObjectFromScene('x_value_label');
+    this._removeObjectFromScene('y_value_label');
+    this._removeObjectFromScene('outline');
+  },
+
+  _removePinsFromScene() {
+    this._removeObjectFromScene('pin');
+  },
+
+  _removeObjectFromScene(objectName) {
     const scene = this.scene;
-    let myLandscape = {};
-
-    while (scene.getObjectByName('landscape')) {
-      myLandscape = scene.getObjectByName('landscape');
-      scene.remove(myLandscape);
-    }
-
-    while (scene.getObjectByName('myAxesHelper')) {
-      const myAxesHelper = scene.getObjectByName('myAxesHelper');
-      scene.remove(myAxesHelper);
-    }
-
-    while (scene.getObjectByName('x_axis_label')) {
-      const x_axis_label = scene.getObjectByName('x_axis_label');
-      scene.remove(x_axis_label);
-    }
-
-    while (scene.getObjectByName('y_axis_label')) {
-      const y_axis_label = scene.getObjectByName('y_axis_label');
-      scene.remove(y_axis_label);
-    }
-
-    while (scene.getObjectByName('z_axis_label')) {
-      const z_axis_label = scene.getObjectByName('z_axis_label');
-      scene.remove(z_axis_label);
-    }
-
-    while (scene.getObjectByName('x_value_label')) {
-      const x_value_label = scene.getObjectByName('x_value_label');
-      scene.remove(x_value_label);
-    }
-
-    while (scene.getObjectByName('y_value_label')) {
-      const y_value_label = scene.getObjectByName('y_value_label');
-      scene.remove(y_value_label);
-    }
-
-    while (scene.getObjectByName('outline')) {
-      const outline = scene.getObjectByName('outline');
-      scene.remove(outline);
-    }
-
-    while (this.scene.getObjectByName('pin')) {
-      const previousPin = this.scene.getObjectByName('pin');
-      this.scene.remove(previousPin);
+    while (scene.getObjectByName(objectName)) {
+      const foundObject = scene.getObjectByName(objectName);
+      scene.remove(foundObject);
     }
   },
 
   clearPins() {
-    while (this.scene.getObjectByName('pin')) {
-      const previousPin = this.scene.getObjectByName('pin');
-      this.scene.remove(previousPin);
-    }
+    this._removePinsFromScene();
 
     // Also need to clear the set that tracks all current pins
-    // this.pinData = {};
     this.pinData = [];
     this.currentPinIds.clear();
     this.numberOfPins = 0;
     this.api.output('allPins', []);
     this.api.output('pinKeys', []);
+  },
+
+  _addCurrentPinsToScene() {
+    this.pinData.forEach(pin => this._addPinToScene(pin));
+  },
+
+  _addPinToScene(pinDatum) {
+    const scenePin = this._generateScenePin(pinDatum);
+    // TODO: Remove this side effect
+    pinDatum.uuid = scenePin.head.uuid;
+    this.scene.add(scenePin.group);
   },
 
   pointLight() {
@@ -334,7 +304,6 @@ export default {
     const state = this.api.inputState;
     const pointLight = state.get('pointLight').export();
     const sceneOptions = state.get('sceneOptions').export();
-    const TWEEN = this.api.imports.TWEEN;
 
     const scene = new THREE.Scene();
 
@@ -387,15 +356,25 @@ export default {
     this.raycaster = new THREE.Raycaster(); // create once
     this.mouse = new THREE.Vector2(); // create once
 
-    const _this = this;
-    render();
+    this._kickOffRender();
+  },
 
-    function render() {
-      TWEEN.update();
-      _this.controls.update();
-      requestAnimationFrame(render);
-      renderer.render(scene, _this.camera);
+  _kickOffRender() {
+    if (this.isRendering) return;
+    this._boundRender();
+  },
+
+  _render() {
+    if (!this.renderer) {
+      this.isRendering = false;
+      return;
     }
+
+    const TWEEN = this.api.imports.TWEEN;
+    TWEEN.update();
+    this.controls.update();
+    this.renderer.render(this.scene, this.camera);
+    requestAnimationFrame(this._boundRender);
   },
 
   _onResize() {
@@ -536,54 +515,60 @@ export default {
     const data = state.get(['data', 'points']).export();
     const terrainOptions = state.get('terrainOptions').export();
 
-    let newColor = {};
-    let pinheadColor = {};
-    let geometry = new THREE.SphereGeometry(3);
+    let pinheadColor;
     if (terrainOptions.alternatePinColors) {
-      pinheadColor = d3.interpolateRainbow(this.numberOfPins / 10);
-      newColor = new THREE.Color(pinheadColor);
+      pinheadColor = d3.interpolateRainbow((this.numberOfPins % 10) / 10);
+      pinheadColor = new THREE.Color(pinheadColor);
     } else {
-      newColor = 0xff0000;
-      pinheadColor = newColor;
+      pinheadColor = 0xff0000;
     }
-    let material = new THREE.MeshBasicMaterial({ color: newColor });
-    const pinhead = new THREE.Mesh(geometry, material);
-    pinhead.position.set(position.x, position.y, position.z + 7);
-    pinhead.name = 'pinhead';
-    geometry = new THREE.CylinderGeometry(1, 0.2, 6, 8);
-    material = new THREE.MeshBasicMaterial({ color: 0xc0c0c0 });
-    const pinpoint = new THREE.Mesh(geometry, material);
-    pinpoint.position.set(position.x, position.y, position.z + 3);
-    pinpoint.rotation.x = Math.PI / 2;
-    pinpoint.name = 'pinpoint';
-    this.pin = new THREE.Group();
-    this.pin.add(pinhead);
-    this.pin.add(pinpoint);
-    this.pin.name = 'pin';
-    this.scene.add(this.pin);
 
     // add the pin's key data to the this.pinData list
-    const thisPinData = {};
-    thisPinData.uuid = pinhead.uuid;
-    thisPinData.projectedIds = binnedIds;
-    thisPinData.position = position;
-    thisPinData.color = pinheadColor;
+    const pinDatum = {
+      // TODO: Is this really needed in pinData?
+      // To be added when added to the scene.
+      uuid: '',
+      projectedIds: binnedIds,
+      position,
+      color: pinheadColor,
 
-    // Searches objects in data array
-    // returns only objects whose projectedIds
-    // match an id in binnedIds
-    thisPinData.data = data.filter(thisPoint => binnedIds.includes(thisPoint.projectedId));
+      // Searches objects in data array
+      // returns only objects whose projectedIds
+      // match an id in binnedIds
+      data: data.filter(thisPoint => binnedIds.includes(thisPoint.projectedId)),
+    };
 
-    this.pinData.push(thisPinData);
-
-    // output the current pin key data
+    this._addPinToScene(pinDatum);
+    this.pinData.push(pinDatum);
     this.api.output('pinKeys', this.pinData);
+  },
 
-    if (this.numberOfPins < 9) {
-      this.numberOfPins++;
-    } else {
-      this.numberOfPins = 0;
-    }
+  _generateScenePin(pinDatum) {
+    const { color, position } = pinDatum;
+
+    const threeJSColor = new THREE.Color(color);
+    let material = new THREE.MeshBasicMaterial({ color: threeJSColor });
+    let geometry = new THREE.SphereGeometry(3);
+    const pinHead = new THREE.Mesh(geometry, material);
+    pinHead.position.set(position.x, position.y, position.z + 7);
+    pinHead.name = 'pinhead';
+
+    geometry = new THREE.CylinderGeometry(1, 0.2, 6, 8);
+    material = new THREE.MeshBasicMaterial({ color: 0xc0c0c0 });
+    const pinPoint = new THREE.Mesh(geometry, material);
+    pinPoint.position.set(position.x, position.y, position.z + 3);
+    pinPoint.rotation.x = Math.PI / 2;
+    pinPoint.name = 'pinpoint';
+
+    const pinGroup = new THREE.Group();
+    pinGroup.add(pinHead);
+    pinGroup.add(pinPoint);
+    pinGroup.name = 'pin';
+    return {
+      head: pinHead,
+      point: pinPoint,
+      group: pinGroup,
+    };
   },
 
   setPins() {
